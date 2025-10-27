@@ -1,0 +1,70 @@
+name: CI - Build & Push & Bump env(dev)
+
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+jobs:
+  build-push-bump:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+      pull-requests: write
+    env:
+      REGISTRY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
+      REPO: ${{ secrets.ECR_REPO }}
+      IMAGE: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/${{ secrets.ECR_REPO }}
+      ENV_REPO: ${{ secrets.ENV_REPO }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/Deployer
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Login to ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Compute tag (yyyymmdd-hhmm)
+        id: vars
+        run: echo "TAG=dev-$(date +'%Y%m%d-%H%M%S')" >> $GITHUB_OUTPUT
+
+      - name: Build
+        run: docker build -t $IMAGE:${{ steps.vars.outputs.TAG }} .
+
+      - name: Push
+        run: docker push $IMAGE:${{ steps.vars.outputs.TAG }}
+
+      - name: Bump env repo (dev overlay image tag)
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+        run: |
+          set -e
+          git config --global user.email "bot@example.com"
+          git config --global user.name "gitops-bot"
+
+          workdir=$(mktemp -d)
+          cd "$workdir"
+          git clone https://$GH_PAT@github.com/${ENV_REPO}.git
+          cd gitops-lab-env
+
+          BR="bump/dev-${{ steps.vars.outputs.TAG }}"
+          git checkout -b "$BR"
+
+          # patch 파일 변경
+          sed -i "s#image: .*#image: ${IMAGE}:${{ steps.vars.outputs.TAG }}#g" apps/demo/overlays/dev/patch-image.yaml
+
+          git add -A
+          git commit -m "feat: bump dev image to ${{ steps.vars.outputs.TAG }}"
+          git push origin "$BR"
+
+          # PR 생성
+          gh auth login --with-token <<< "$GH_PAT"
+          gh pr create --title "Bump dev image -> ${{ steps.vars.outputs.TAG }}" --body "Auto PR from CI" --base main --head "$BR"
