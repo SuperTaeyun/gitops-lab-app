@@ -10,4 +10,4 @@ const server = http.createServer((req, res) => {
     res.end(`<h1>It works! 🚀</h1><p>GitOps via Argo CD</p>`);
 });
 
-server.listen(3000, () => console.log('Listening on 3000'));
+server.listen(3000, () => console.log('Listening on 3000.'));
