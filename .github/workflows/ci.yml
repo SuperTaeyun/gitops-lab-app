@@ -45,6 +45,7 @@ jobs:
       - name: Bump env repo (dev overlay image tag)
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
+          ENV_REPO: ${{ secrets.ENV_REPO }} # e.g. SuperTaeyun/gitops-lab-env
         run: |
           set -e
           git config --global user.email "bot@example.com"
@@ -52,19 +53,27 @@ jobs:
 
           workdir=$(mktemp -d)
           cd "$workdir"
-          git clone https://$GH_PAT@github.com/${ENV_REPO}.git
-          cd gitops-lab-env
 
-          BR="bump/dev-${{ steps.vars.outputs.TAG }}"
+          # 1) 토큰 포함 URL로 클론
+          REPO_URL="https://x-access-token:${GH_PAT}@github.com/${ENV_REPO}.git"
+          git clone "$REPO_URL"
+          cd "$(basename "$ENV_REPO")"
+
+          # 2) 혹시라도 origin이 토큰 없는 URL로 바뀌지 않게 강제
+          git remote set-url origin "$REPO_URL"
+
+          # 3) (선택) 모든 github.com URL을 토큰 버전으로 강제 치환
+          git config --global url."https://x-access-token:${GH_PAT}@github.com/".insteadOf "https://github.com/"
+
+          BR="bump/dev-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           git checkout -b "$BR"
 
-          # patch 파일 변경
           sed -i "s#image: .*#image: ${IMAGE}:${{ steps.vars.outputs.TAG }}#g" apps/demo/overlays/dev/patch-image.yaml
 
           git add -A
           git commit -m "feat: bump dev image to ${{ steps.vars.outputs.TAG }}"
           git push origin "$BR"
 
-          # PR 생성
-          gh auth login --with-token <<< "$GH_PAT"
+          # gh CLI에도 같은 토큰 사용
+          echo "$GH_PAT" | gh auth login --with-token
           gh pr create --title "Bump dev image -> ${{ steps.vars.outputs.TAG }}" --body "Auto PR from CI" --base main --head "$BR"
